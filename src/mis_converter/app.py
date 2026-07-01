@@ -50,6 +50,9 @@ if "sp_buffer" not in st.session_state:
 if "sp_uploaded_name" not in st.session_state:
     st.session_state.sp_uploaded_name = None
 
+if "sp_sort_by" not in st.session_state:
+    st.session_state.sp_sort_by = "Buyer Name"
+
 
 # ── Helper: format file size for display ───────────────────────────────
 def _safe_display_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -107,7 +110,6 @@ with st.sidebar:
         ),
         key="mode",
         selection_mode="single",
-        default="mis",
         label_visibility="collapsed",
     )
     if mode is None:
@@ -165,12 +167,12 @@ def _render_mis_ui(raw_df: pd.DataFrame) -> None:
     # ---- Preview + Convert ----
     _, btn_col, _ = st.columns([6, 2, 1])
     with btn_col:
-        convert_clicked = st.button("▶ Convert", type="primary", key="mis_convert", use_container_width=True)
+        convert_clicked = st.button("▶ Convert", type="primary", key="mis_convert", width="stretch")
 
     st.dataframe(
         _safe_display_df(raw_df),
         height=280,
-        use_container_width=True,
+        width="stretch",
     )
 
     if convert_clicked:
@@ -234,20 +236,26 @@ def _render_mis_results() -> None:
             data=st.session_state.mis_buffer,
             file_name="mis_formatted_output.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
 
     processed_preview = sorted_df.drop(columns=["_fy_sort"], errors="ignore")
     st.dataframe(
         _safe_display_df(processed_preview),
         height=280,
-        use_container_width=True,
+        width="stretch",
     )
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # SALE / PURCHASE SUMMARIZER MODE
 # ═══════════════════════════════════════════════════════════════════════
+
+
+def _on_sp_sort_change() -> None:
+    """Clear cached conversion results when sort-by option changes."""
+    st.session_state.sp_buffer = None
+    st.session_state.sp_uploaded_name = None
 
 
 def _render_sp_ui(raw_df: pd.DataFrame) -> None:
@@ -260,6 +268,18 @@ def _render_sp_ui(raw_df: pd.DataFrame) -> None:
     if missing:
         st.warning(f"Missing columns: **{', '.join(missing)}**. Will skip them.")
 
+    # ── Sort-by selector ──────────────────────────────────────────────────
+    sort_col, _ = st.columns([4, 6])
+    with sort_col:
+        st.session_state.sp_sort_by = st.radio(
+            "Sort by",
+            options=["Buyer Name", "Seller Name"],
+            key="sp_sort_radio",
+            horizontal=True,
+            label_visibility="visible",
+            on_change=_on_sp_sort_change,
+        )
+
     if st.session_state.sp_buffer is not None:
         _render_sp_results()
         return
@@ -267,12 +287,12 @@ def _render_sp_ui(raw_df: pd.DataFrame) -> None:
     # ---- Preview + Convert ----
     _, btn_col, _ = st.columns([6, 2, 1])
     with btn_col:
-        convert_clicked = st.button("▶ Convert", type="primary", key="sp_convert", use_container_width=True)
+        convert_clicked = st.button("▶ Convert", type="primary", key="sp_convert", width="stretch")
 
     st.dataframe(
         _safe_display_df(raw_df),
         height=280,
-        use_container_width=True,
+        width="stretch",
     )
 
     if convert_clicked:
@@ -290,14 +310,16 @@ def _run_sp_conversion(raw_df: DataFrame) -> None:
             import tempfile
             import os
 
+            sort_by = st.session_state.sp_sort_by
+
             suffix = ".xls" if uploaded_file.name.endswith(".xls") else ".xlsx"
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 tmp.write(uploaded_file.getbuffer())
                 tmp_path = tmp.name
 
-            status.write("Generating Excel file with totals…")
+            status.write(f"Generating Excel file sorted by {sort_by}…")
             buf = io.BytesIO()
-            sp_convert(tmp_path, buf)
+            sp_convert(tmp_path, buf, sort_by=sort_by)
             buf.seek(0)
             os.unlink(tmp_path)
 
@@ -353,13 +375,13 @@ def _render_sp_results() -> None:
             data=st.session_state.sp_buffer,
             file_name="sale_purchase_output.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
 
     st.dataframe(
         _safe_display_df(preview_df),
         height=280,
-        use_container_width=True,
+        width="stretch",
     )
 
 

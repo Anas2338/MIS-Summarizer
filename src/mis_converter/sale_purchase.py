@@ -93,8 +93,15 @@ def clean_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def group_and_total(df: pd.DataFrame) -> list[dict]:
-    """Group invoices by Buyer Name and insert TOTAL + blank separator rows.
+def group_and_total(df: pd.DataFrame, sort_by: str = "Buyer Name") -> list[dict]:
+    """Group invoices by *sort_by* column and insert TOTAL + blank separator rows.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Cleaned invoice data.
+    sort_by : str
+        Column to group/sort by — ``"Buyer Name"`` or ``"Seller Name"``.
 
     Returns an ordered list of row dicts.  Each dict has a ``_row_type`` key
     (``"data"``, ``"total"``, or ``"blank"``) so the writer can style
@@ -104,10 +111,9 @@ def group_and_total(df: pd.DataFrame) -> list[dict]:
     present_sum_cols = [c for c in SUM_COLS if c in df.columns]
     present_cols = [c for c in KEEP_COLS if c in df.columns]
 
-    # Sort: Buyer Name (case-insensitive) → Invoice No. descending
-    # Add a sort key column for case-insensitive buyer ordering
-    df["_buyer_sort"] = df["Buyer Name"].str.lower()
-    sort_cols = ["_buyer_sort"]
+    # Sort by chosen column (case-insensitive) → Invoice No. descending
+    df["_sort_key"] = df[sort_by].str.lower()
+    sort_cols = ["_sort_key"]
     ascending = [True]
     if "Invoice No." in df.columns:
         sort_cols.append("Invoice No.")
@@ -116,13 +122,13 @@ def group_and_total(df: pd.DataFrame) -> list[dict]:
 
     rows: list[dict] = []
 
-    if "Buyer Name" not in df.columns:
+    if sort_by not in df.columns:
         return rows
 
-    buyer_groups = df.groupby("Buyer Name", sort=False)
-    buyer_names = list(buyer_groups.groups.keys())
+    groups = df.groupby(sort_by, sort=False)
+    group_names = list(groups.groups.keys())
 
-    for idx, (buyer_name, group) in enumerate(buyer_groups):
+    for idx, (group_name, group) in enumerate(groups):
         # Emit data rows
         for _, row in group.iterrows():
             entry: dict = {"_row_type": "data"}
@@ -148,7 +154,7 @@ def group_and_total(df: pd.DataFrame) -> list[dict]:
         rows.append(total_entry)
 
         # Emit blank separator row (except after the last buyer)
-        if idx < len(buyer_names) - 1:
+        if idx < len(group_names) - 1:
             rows.append({"_row_type": "blank"})
 
     return rows
@@ -380,28 +386,39 @@ def write_output(rows: list[dict], output_path: str) -> None:
             f"{get_column_letter(rate_col)}{current_row}"
         )
 
-    # ── Column widths ───────────────────────────────────────────────────
-    col_widths = {
-        "A": 14,   # Invoice No.
-        "B": 16,   # Invoice Type
-        "C": 16,   # Invoice Date
-        "D": 32,   # Buyer Name
-        "E": 18,   # Seller Name
-        "F": 10,   # Quantity
-        "G": 8,    # Rate
-        "H": 38,   # Value of Sales Excluding Sales Tax
-        "I": 32,   # Sales Tax/ FED in ST Mode
-        "J": 14,   # Further Tax
+    # ── Column widths (looked up by column name, not hardcoded letter) ──
+    column_widths = {
+        "Invoice No.": 14,
+        "Invoice Type": 16,
+        "Invoice Date": 16,
+        "Buyer Name": 32,
+        "Seller Name": 18,
+        "Quantity": 10,
+        "Rate": 8,
+        "Value of Sales Excluding Sales Tax": 38,
+        "Sales Tax/ FED in ST Mode": 32,
+        "Further Tax": 14,
     }
-    for col_letter, width in col_widths.items():
-        ws.column_dimensions[col_letter].width = width
+    for col_idx, col_name in enumerate(display_columns, 1):
+        col_letter = get_column_letter(col_idx)
+        ws.column_dimensions[col_letter].width = column_widths.get(col_name, 12)
 
     wb.save(output_path)
 
 
-def convert(input_path: str, output_path: str) -> None:
-    """Orchestrator: read → clean → group → write."""
+def convert(input_path: str, output_path: str, sort_by: str = "Buyer Name") -> None:
+    """Orchestrator: read → clean → group → write.
+
+    Parameters
+    ----------
+    input_path : str
+        Path to the raw Excel file.
+    output_path : str
+        Path or buffer for the formatted output.
+    sort_by : str
+        Column to group/sort by — ``"Buyer Name"`` (default) or ``"Seller Name"``.
+    """
     df = read_input(input_path)
     df = clean_columns(df)
-    rows = group_and_total(df)
+    rows = group_and_total(df, sort_by=sort_by)
     write_output(rows, output_path)
