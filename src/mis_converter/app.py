@@ -273,7 +273,7 @@ def _render_sp_ui(raw_df: pd.DataFrame) -> None:
     with sort_col:
         st.session_state.sp_sort_by = st.radio(
             "Sort by",
-            options=["Buyer Name", "Seller Name"],
+            options=["Buyer Name", "Seller Name", "Tax Year"],
             key="sp_sort_radio",
             horizontal=True,
             label_visibility="visible",

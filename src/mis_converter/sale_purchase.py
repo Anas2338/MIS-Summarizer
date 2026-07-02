@@ -44,6 +44,34 @@ SUM_COLS = [
 ]
 
 
+# ── Tax year helpers (for "Tax Year" sort mode) ────────────────────────────
+
+def _tax_year_label(date) -> str:
+    """Derive a financial-year label from a datetime.
+
+    Financial year runs 1 July – 30 June.
+    25-May-2026 → "TAX YEAR 2025-26"
+    14-Jul-2025 → "TAX YEAR 2025-26"
+    """
+    if pd.isna(date):
+        return "TAX YEAR UNKNOWN"
+    year = date.year
+    month = date.month
+    if month >= 7:
+        return f"TAX YEAR {year}-{str(year + 1)[-2:]}"
+    else:
+        return f"TAX YEAR {year - 1}-{str(year)[-2:]}"
+
+
+def _tax_year_sort_key(date) -> int:
+    """Return the starting year of the financial year (for sorting)."""
+    if pd.isna(date):
+        return 9999
+    year = date.year
+    month = date.month
+    return year if month >= 7 else year - 1
+
+
 def read_input(input_path: str) -> pd.DataFrame:
     """Read the raw Excel file and return a DataFrame with stripped column names."""
     df = pd.read_excel(input_path)
@@ -101,16 +129,79 @@ def group_and_total(df: pd.DataFrame, sort_by: str = "Buyer Name") -> list[dict]
     df : pd.DataFrame
         Cleaned invoice data.
     sort_by : str
-        Column to group/sort by — ``"Buyer Name"`` or ``"Seller Name"``.
+        Column to group/sort by — ``"Buyer Name"``, ``"Seller Name"``,
+        or ``"Tax Year"``.
 
     Returns an ordered list of row dicts.  Each dict has a ``_row_type`` key
-    (``"data"``, ``"total"``, or ``"blank"``) so the writer can style
-    accordingly.
+    (``"data"``, ``"total"``, ``"blank"``, or ``"heading"``) so the writer
+    can style accordingly.
     """
     # Work out which of the SUM_COLS are actually present
     present_sum_cols = [c for c in SUM_COLS if c in df.columns]
     present_cols = [c for c in KEEP_COLS if c in df.columns]
 
+    rows: list[dict] = []
+
+    # ── Tax Year sort mode ─────────────────────────────────────────────────
+    if sort_by == "Tax Year":
+        df = df.copy()
+
+        # If Invoice Date is missing, fall back to a single "UNKNOWN" group
+        if "Invoice Date" not in df.columns:
+            df["_tax_year_label"] = "TAX YEAR UNKNOWN"
+            df["_tax_year_sort"] = 9999
+        else:
+            # Derive tax year label and sort key from Invoice Date
+            df["_tax_year_label"] = df["Invoice Date"].apply(_tax_year_label)
+            df["_tax_year_sort"] = df["Invoice Date"].apply(_tax_year_sort_key)
+
+        # Sort by tax year → Invoice Date asc → Invoice No. desc
+        sort_cols = ["_tax_year_sort"]
+        ascending = [True]
+        if "Invoice Date" in df.columns:
+            sort_cols.append("Invoice Date")
+            ascending.append(True)
+        if "Invoice No." in df.columns:
+            sort_cols.append("Invoice No.")
+            ascending.append(False)
+        df = df.sort_values(by=sort_cols, ascending=ascending).reset_index(drop=True)
+
+        # Group by tax year label
+        groups = df.groupby("_tax_year_label", sort=False)
+        group_names = list(groups.groups.keys())
+
+        for idx, (group_name, group) in enumerate(groups):
+            # Emit heading row
+            rows.append({"_row_type": "heading", "_heading": group_name})
+
+            # Emit data rows
+            for _, row in group.iterrows():
+                entry: dict = {"_row_type": "data"}
+                for col in present_cols:
+                    val = row[col]
+                    entry[col] = val
+                if "Invoice Date" in entry and pd.notna(entry["Invoice Date"]):
+                    entry["Invoice Date"] = entry["Invoice Date"].strftime("%d-%b-%Y")
+                rows.append(entry)
+
+            # Emit TOTAL row for this tax year
+            total_entry: dict = {"_row_type": "total"}
+            for col in present_cols:
+                if col == "Quantity":
+                    total_entry[col] = "TOTAL"
+                elif col in present_sum_cols:
+                    total_entry[col] = int(group[col].fillna(0).sum())
+                else:
+                    total_entry[col] = None
+            rows.append(total_entry)
+
+            # Emit blank separator (except after the last group)
+            if idx < len(group_names) - 1:
+                rows.append({"_row_type": "blank"})
+
+        return rows
+
+    # ── Buyer Name / Seller Name sort mode (original behaviour) ─────────────
     # Sort by chosen column (case-insensitive) → Invoice No. descending
     df["_sort_key"] = df[sort_by].str.lower()
     sort_cols = ["_sort_key"]
@@ -119,8 +210,6 @@ def group_and_total(df: pd.DataFrame, sort_by: str = "Buyer Name") -> list[dict]
         sort_cols.append("Invoice No.")
         ascending.append(False)
     df = df.sort_values(by=sort_cols, ascending=ascending).reset_index(drop=True)
-
-    rows: list[dict] = []
 
     if sort_by not in df.columns:
         return rows
@@ -275,6 +364,21 @@ def write_output(rows: list[dict], output_path: str) -> None:
             current_row += 1
             continue
 
+        if rtype == "heading":
+            # Single merged cell spanning all columns (e.g. "TAX YEAR 2025-26")
+            heading_text = row_dict.get("_heading", "")
+            merge_range = (
+                f"A{current_row}:{get_column_letter(num_cols)}{current_row}"
+            )
+            for col_idx in range(1, num_cols + 1):
+                ws.cell(row=current_row, column=col_idx).border = outer_border
+            ws.merge_cells(merge_range)
+            cell = ws.cell(row=current_row, column=1, value=heading_text)
+            cell.font = Font(bold=True, size=12)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            current_row += 1
+            continue
+
         if rtype == "data":
             # Track data row range for the current buyer group
             if buyer_data_start is None:
@@ -416,7 +520,8 @@ def convert(input_path: str, output_path: str, sort_by: str = "Buyer Name") -> N
     output_path : str
         Path or buffer for the formatted output.
     sort_by : str
-        Column to group/sort by — ``"Buyer Name"`` (default) or ``"Seller Name"``.
+        Column to group/sort by — ``"Buyer Name"`` (default),
+        ``"Seller Name"``, or ``"Tax Year"``.
     """
     df = read_input(input_path)
     df = clean_columns(df)
