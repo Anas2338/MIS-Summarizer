@@ -170,7 +170,19 @@ def write_output(df: pd.DataFrame, output_path: str) -> None:
 
     current_row = 1
 
-    # ── Row 1: Column headers ───────────────────────────────────────────
+    # ── Row 1: "MIS" main heading ───────────────────────────────────────
+    merge_range = (
+        f"A{current_row}:{get_column_letter(num_cols)}{current_row}"
+    )
+    for col_idx in range(1, num_cols + 1):
+        ws.cell(row=current_row, column=col_idx).border = outer_border
+    ws.merge_cells(merge_range)
+    cell = ws.cell(row=current_row, column=1, value="MIS")
+    cell.font = year_font
+    cell.alignment = year_alignment
+    current_row += 1
+
+    # ── Row 2: Column headers ───────────────────────────────────────────
     for col_idx, col_name in enumerate(display_columns, 1):
         cell = ws.cell(row=current_row, column=col_idx, value=col_name)
         cell.font = header_font
