@@ -102,27 +102,36 @@ with st.sidebar:
     # ── Mode selector ──────────────────────────────────────────────────
     prev_mode = st.session_state.mode
 
-    mode = st.segmented_control(
+    # Restore widget display if user previously deselected it
+    if st.session_state.get("mode_selector") is None:
+        st.session_state.mode_selector = prev_mode
+
+    mode_selection = st.segmented_control(
         "Mode",
         options=["mis", "sp"],
         format_func=lambda m: (
             "📊 MIS" if m == "mis" else "🧾 Sale/Purchase"
         ),
-        key="mode",
+        key="mode_selector",
         selection_mode="single",
         label_visibility="collapsed",
     )
-    if mode is None:
-        st.session_state.mode = prev_mode
 
-    if st.session_state.mode != prev_mode:
-        if st.session_state.mode == "mis":
+    # Deselected → keep the previous mode
+    if mode_selection is None:
+        mode_selection = prev_mode
+
+    # Clear stale cached state when switching modes
+    if mode_selection != prev_mode:
+        if mode_selection == "mis":
             st.session_state.sp_buffer = None
             st.session_state.sp_uploaded_name = None
         else:
             st.session_state.mis_clean_df = None
             st.session_state.mis_buffer = None
             st.session_state.mis_uploaded_name = None
+
+    st.session_state.mode = mode_selection
 
     st.divider()
 
