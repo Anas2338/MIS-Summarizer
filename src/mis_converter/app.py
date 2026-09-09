@@ -1,8 +1,9 @@
 """Streamlit web frontend for MIS Data Converter.
 
-Supports two modes:
+Supports three modes:
   - MIS Summarizer — tax payment data grouped by financial year & section
   - Sale/Purchase Summarizer — invoice data grouped by buyer with totals
+  - Bank Statement — extract transactions from PDF and generate Excel report
 """
 
 from __future__ import annotations
@@ -24,6 +25,9 @@ from mis_converter.sale_purchase import (
     KEEP_COLS as SP_KEEP_COLS,
     convert as sp_convert,
     read_input as sp_read_input,
+)
+from mis_converter.bank_statement import (
+    convert as bank_convert,
 )
 
 # ── Page configuration ─────────────────────────────────────────────────
@@ -52,6 +56,13 @@ if "sp_uploaded_name" not in st.session_state:
 
 if "sp_sort_by" not in st.session_state:
     st.session_state.sp_sort_by = "Buyer Name"
+
+if "bank_data" not in st.session_state:
+    st.session_state.bank_data = None
+if "bank_buffer" not in st.session_state:
+    st.session_state.bank_buffer = None
+if "bank_uploaded_name" not in st.session_state:
+    st.session_state.bank_uploaded_name = None
 
 
 # ── Helper: format file size for display ───────────────────────────────
@@ -108,9 +119,11 @@ with st.sidebar:
 
     mode_selection = st.segmented_control(
         "Mode",
-        options=["mis", "sp"],
+        options=["mis", "sp", "bank"],
         format_func=lambda m: (
-            "📊 MIS" if m == "mis" else "🧾 Sale/Purchase"
+            "📊 MIS" if m == "mis"
+            else "🧾 Sale/Purchase" if m == "sp"
+            else "🏦 Meezan Bank"
         ),
         key="mode_selector",
         selection_mode="single",
@@ -126,22 +139,44 @@ with st.sidebar:
         if mode_selection == "mis":
             st.session_state.sp_buffer = None
             st.session_state.sp_uploaded_name = None
-        else:
+            st.session_state.bank_data = None
+            st.session_state.bank_buffer = None
+            st.session_state.bank_uploaded_name = None
+        elif mode_selection == "sp":
             st.session_state.mis_clean_df = None
             st.session_state.mis_buffer = None
             st.session_state.mis_uploaded_name = None
+            st.session_state.bank_data = None
+            st.session_state.bank_buffer = None
+            st.session_state.bank_uploaded_name = None
+        else:  # bank
+            st.session_state.mis_clean_df = None
+            st.session_state.mis_buffer = None
+            st.session_state.mis_uploaded_name = None
+            st.session_state.sp_buffer = None
+            st.session_state.sp_uploaded_name = None
 
     st.session_state.mode = mode_selection
 
     st.divider()
 
     # ── File uploader ─────────────────────────────────────────────────
-    uploaded_file = st.file_uploader(
-        "Upload Excel File",
-        type=["xls", "xlsx"],
-        help="Upload a raw MIS Excel export (.xls or .xlsx)",
-        key="uploader",
-    )
+    if st.session_state.mode == "bank":
+        uploaded_file = st.file_uploader(
+            "Upload Meezan Bank Statement PDF",
+            type=["pdf"],
+            help="Upload a Meezan Bank account statement in PDF format",
+            key="uploader",
+        )
+        if uploaded_file is None:
+            st.info("ℹ️ **Currently supports**: Meezan Bank statement format only. Other banks coming soon.")
+    else:
+        uploaded_file = st.file_uploader(
+            "Upload Excel File",
+            type=["xls", "xlsx"],
+            help="Upload a raw MIS Excel export (.xls or .xlsx)",
+            key="uploader",
+        )
 
     if uploaded_file is not None:
         ext = uploaded_file.name.rsplit(".", 1)[-1].upper()
@@ -395,6 +430,122 @@ def _render_sp_results() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# BANK STATEMENT MODE
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _render_bank_ui() -> None:
+    """Bank Statement UI."""
+    if st.session_state.bank_uploaded_name != uploaded_file.name:
+        st.session_state.bank_data = None
+        st.session_state.bank_buffer = None
+        st.session_state.bank_uploaded_name = uploaded_file.name
+
+    if st.session_state.bank_buffer is not None:
+        _render_bank_results()
+        return
+
+    # ---- Format info + Convert ----
+    st.info("ℹ️ **Supported Format**: Meezan Bank online account statements. Other bank formats coming soon.")
+
+    _, btn_col, _ = st.columns([6, 2, 1])
+    with btn_col:
+        convert_clicked = st.button("▶ Extract", type="primary", key="bank_convert", width="stretch")
+
+    st.caption("📄 **Meezan Bank statement PDF uploaded.** Click Extract to parse all transactions.")
+
+    if convert_clicked:
+        with st.spinner("Extracting transactions..."):
+            _run_bank_conversion()
+        st.rerun()
+
+
+def _run_bank_conversion() -> None:
+    """Run the bank statement conversion."""
+    try:
+        with st.status("Extracting…", expanded=False) as status:
+            status.write("Parsing PDF…")
+
+            import tempfile
+            import os
+
+            # Save uploaded PDF to temp file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(uploaded_file.getbuffer())
+                tmp_path = tmp.name
+
+            status.write("Extracting transactions…")
+            buf = io.BytesIO()
+            data = bank_convert(tmp_path, buf)
+            buf.seek(0)
+            os.unlink(tmp_path)
+
+            st.session_state.bank_data = data
+            st.session_state.bank_buffer = buf
+            st.session_state.bank_uploaded_name = uploaded_file.name
+
+            status.write("✅ Extraction complete!")
+    except Exception as exc:
+        st.error("An error occurred during extraction.")
+        st.exception(exc)
+
+
+def _render_bank_results() -> None:
+    """Render the bank statement conversion results."""
+    data = st.session_state.bank_data
+    buf = st.session_state.bank_buffer
+
+    # Calculate totals
+    total_credits = sum(t['credit'] for t in data['transactions'])
+    total_debits = sum(t['debit'] for t in data['transactions'])
+
+    # Add custom CSS to reduce metric value font size
+    st.markdown("""
+        <style>
+        [data-testid="stMetricValue"] {
+            font-size: 20px !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    # Display metrics
+    m1, m2, m3, m4, _, dl = st.columns([1, 1, 1, 1, 1, 2])
+    m1.metric("Total Transactions", len(data['transactions']))
+    m2.metric("Total Credits", f"{total_credits:,.2f}")
+    m3.metric("Total Debits", f"{total_debits:,.2f}")
+    m4.metric("Closing Balance", f"{data['closing_balance']:,.2f}")
+    with dl:
+        st.download_button(
+            label="📥 Download Excel",
+            data=st.session_state.bank_buffer,
+            file_name="bank_statement_output.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+        )
+
+    # Display account info
+    st.markdown(f"**Account:** {data['account_title']} | {data['account_number']}")
+    st.markdown(f"**Period:** {data['from_date']} to {data['to_date']} | **Opening Balance:** {data['opening_balance']:,.2f}")
+
+    # Display transactions as dataframe
+    transactions_df = pd.DataFrame(data['transactions'])
+    # Format amounts for display
+    transactions_df['credit'] = transactions_df['credit'].apply(lambda x: f"{x:,.2f}" if x > 0 else "")
+    transactions_df['debit'] = transactions_df['debit'].apply(lambda x: f"{x:,.2f}" if x > 0 else "")
+    transactions_df['balance'] = transactions_df['balance'].apply(lambda x: f"{x:,.2f}")
+
+    # Rename columns for display
+    transactions_df.columns = ['Date', 'Description', 'Credit', 'Debit', 'Balance']
+
+    st.dataframe(
+        transactions_df,
+        height=280,
+        width="stretch",
+        hide_index=True,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -404,11 +555,15 @@ def main() -> None:
     if uploaded_file is None:
         _clear_state_for_current_mode()
 
-        mode_label = (
-            "MIS Summarizer" if st.session_state.mode == "mis"
-            else "Sale/Purchase Invoice Summarizer"
-        )
-        icon = "📊" if st.session_state.mode == "mis" else "🧾"
+        if st.session_state.mode == "mis":
+            mode_label = "MIS Summarizer"
+            icon = "📊"
+        elif st.session_state.mode == "sp":
+            mode_label = "Sale/Purchase Invoice Summarizer"
+            icon = "🧾"
+        else:  # bank
+            mode_label = "Meezan Bank Statement Processor"
+            icon = "🏦"
 
         st.markdown(
             f"<h1 style='text-align: center; margin-bottom: 0;'>{icon} {mode_label}</h1>",
@@ -420,31 +575,45 @@ def main() -> None:
             unsafe_allow_html=True,
         )
         c1, c2, c3 = st.columns(3)
-        c1.info("📤 **Upload**\n\n.xls or .xlsx file")
-        c2.info("🔄 **Convert**\n\nAuto-formatted report")
-        c3.info("📥 **Download**\n\nStyled .xlsx file")
-        return
-
-    # --- Read raw file ----------------------------------------------------
-    try:
-        if st.session_state.mode == "mis":
-            raw_df = read_input(uploaded_file)
+        if st.session_state.mode == "bank":
+            c1.info("📤 **Upload**\n\nMeezan Bank PDF")
+            c2.info("🔄 **Extract**\n\nParse transactions")
+            c3.info("📥 **Download**\n\nFormatted .xlsx file")
+            st.markdown(
+                "<p style='text-align: center; color: #666; margin-top: 20px;'>"
+                "⚠️ Currently supports Meezan Bank statement format only</p>",
+                unsafe_allow_html=True,
+            )
         else:
-            raw_df = sp_read_input(uploaded_file)
-    except Exception as exc:
-        st.error("Failed to read the file. Please ensure it is a valid MIS Excel export.")
-        st.exception(exc)
-        return
-
-    if raw_df.empty:
-        st.error("The file appears to be empty. Please check the source file.")
+            c1.info("📤 **Upload**\n\n.xls or .xlsx file")
+            c2.info("🔄 **Convert**\n\nAuto-formatted report")
+            c3.info("📥 **Download**\n\nStyled .xlsx file")
         return
 
     # --- Route to mode-specific UI ----------------------------------------
-    if st.session_state.mode == "mis":
-        _render_mis_ui(raw_df)
+    if st.session_state.mode == "bank":
+        # Bank mode: PDF input, no preview needed
+        _render_bank_ui()
     else:
-        _render_sp_ui(raw_df)
+        # MIS and Sale/Purchase modes: Excel input
+        try:
+            if st.session_state.mode == "mis":
+                raw_df = read_input(uploaded_file)
+            else:
+                raw_df = sp_read_input(uploaded_file)
+        except Exception as exc:
+            st.error("Failed to read the file. Please ensure it is a valid Excel export.")
+            st.exception(exc)
+            return
+
+        if raw_df.empty:
+            st.error("The file appears to be empty. Please check the source file.")
+            return
+
+        if st.session_state.mode == "mis":
+            _render_mis_ui(raw_df)
+        else:
+            _render_sp_ui(raw_df)
 
 
 def _clear_state_for_current_mode() -> None:
@@ -453,9 +622,13 @@ def _clear_state_for_current_mode() -> None:
         st.session_state.mis_clean_df = None
         st.session_state.mis_buffer = None
         st.session_state.mis_uploaded_name = None
-    else:
+    elif st.session_state.mode == "sp":
         st.session_state.sp_buffer = None
         st.session_state.sp_uploaded_name = None
+    else:  # bank
+        st.session_state.bank_data = None
+        st.session_state.bank_buffer = None
+        st.session_state.bank_uploaded_name = None
 
 
 if __name__ == "__main__":
