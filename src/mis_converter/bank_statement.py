@@ -136,13 +136,18 @@ def _parse_transactions(text: str) -> list[dict]:
     while i < len(lines):
         line = lines[i].strip()
 
-        # Skip header lines
-        if any(x in line for x in ['Account Statement', 'Booking Date', 'Description', 'Credit', 'Debit']):
+        # Match transaction line starting with date
+        date_match = re.match(r'^(\d{2}\s+[A-Za-z]+\s+\d{4})\s+(.+)$', line)
+
+        # Skip header lines. A line starting with a booking date is always a
+        # transaction, even when its description contains the words
+        # "Credit"/"Debit" (e.g. "Batch Transfer - Credit SALARY TRF").
+        if date_match is None and any(
+            x in line for x in ['Account Statement', 'Booking Date', 'Description', 'Credit', 'Debit']
+        ):
             i += 1
             continue
 
-        # Match transaction line starting with date
-        date_match = re.match(r'^(\d{2}\s+[A-Za-z]+\s+\d{4})\s+(.+)$', line)
         if date_match:
             date_str = date_match.group(1)
             rest = date_match.group(2).strip()
