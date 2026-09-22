@@ -9,10 +9,20 @@ Supports three modes:
 from __future__ import annotations
 
 import io
+import sys
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 from pandas import DataFrame
+
+# Make sure we import the package straight from this source tree.
+# Without this, a stale copy installed in site-packages (e.g. a cached
+# build on Streamlit Cloud) can shadow the current code and raise
+# ImportError for newly added functions.
+_SRC_ROOT = Path(__file__).resolve().parents[1]
+if str(_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SRC_ROOT))
 
 from mis_converter.converter import (
     add_financial_year,
