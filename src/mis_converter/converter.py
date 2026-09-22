@@ -103,6 +103,40 @@ def add_financial_year(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_financial_year_from_tax_year(df: pd.DataFrame) -> pd.DataFrame:
+    """Add Financial Year label and sort key from existing Tax Year column.
+
+    Uses the Tax Year column from the raw Excel file instead of calculating
+    from Payment Date.
+    e.g. Tax Year 2015 -> TAX YEAR 2015
+    """
+    df = df.copy()
+
+    def _fy_label(tax_year):
+        """Convert Tax Year int to Financial Year label."""
+        if pd.isna(tax_year) or tax_year == 0:
+            return "TAX YEAR UNKNOWN"
+        try:
+            year = int(tax_year)
+            return f"TAX YEAR {year}"
+        except (ValueError, TypeError):
+            return "TAX YEAR UNKNOWN"
+
+    def _fy_sort_key(tax_year):
+        """Return the Tax Year for sorting."""
+        if pd.isna(tax_year) or tax_year == 0:
+            return 9999
+        try:
+            return int(tax_year)
+        except (ValueError, TypeError):
+            return 9999
+
+    df["Financial Year"] = df["Tax Year"].apply(_fy_label)
+    df["_fy_sort"] = df["Tax Year"].apply(_fy_sort_key)
+
+    return df
+
+
 def sort_data(df: pd.DataFrame) -> pd.DataFrame:
     """Sort by financial year -> Section -> Payment Date."""
     df = df.copy()
@@ -306,10 +340,21 @@ def write_output(df: pd.DataFrame, output_path: str) -> None:
     wb.save(output_path)
 
 
-def convert(input_path: str, output_path: str) -> None:
-    """Main orchestrator: read -> clean -> add_fy -> sort -> write."""
+def convert(input_path: str, output_path: str, sort_by: str = "date") -> None:
+    """Main orchestrator: read -> clean -> add_fy -> sort -> write.
+
+    Args:
+        input_path: Path to input Excel file
+        output_path: Path to output Excel file
+        sort_by: Either "date" (sort by payment date) or "tax_year" (sort by Tax Year column)
+    """
     df = read_input(input_path)
     df = clean_data(df)
-    df = add_financial_year(df)
+
+    if sort_by == "tax_year":
+        df = add_financial_year_from_tax_year(df)
+    else:
+        df = add_financial_year(df)
+
     df = sort_data(df)
     write_output(df, output_path)

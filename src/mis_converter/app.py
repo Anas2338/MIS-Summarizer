@@ -16,6 +16,7 @@ from pandas import DataFrame
 
 from mis_converter.converter import (
     add_financial_year,
+    add_financial_year_from_tax_year,
     clean_data,
     read_input,
     sort_data,
@@ -48,6 +49,8 @@ if "mis_buffer" not in st.session_state:
     st.session_state.mis_buffer = None
 if "mis_uploaded_name" not in st.session_state:
     st.session_state.mis_uploaded_name = None
+if "mis_sort_by" not in st.session_state:
+    st.session_state.mis_sort_by = "date"
 
 if "sp_buffer" not in st.session_state:
     st.session_state.sp_buffer = None
@@ -193,6 +196,12 @@ MIS_EXPECTED_COLS = [
 ]
 
 
+def _on_mis_sort_change() -> None:
+    """Clear cached conversion results when sort method changes."""
+    st.session_state.mis_clean_df = None
+    st.session_state.mis_buffer = None
+
+
 def _render_mis_ui(raw_df: pd.DataFrame) -> None:
     """MIS Summarizer UI."""
     if st.session_state.mis_uploaded_name != uploaded_file.name:
@@ -203,6 +212,19 @@ def _render_mis_ui(raw_df: pd.DataFrame) -> None:
     missing = [c for c in MIS_EXPECTED_COLS if c not in raw_df.columns]
     if missing:
         st.warning(f"Missing columns: **{', '.join(missing)}**. Will skip them.")
+
+    # ── Sort-by selector ──────────────────────────────────────────────────
+    sort_col, _ = st.columns([4, 6])
+    with sort_col:
+        st.session_state.mis_sort_by = st.radio(
+            "Sort by",
+            options=["date", "tax_year"],
+            format_func=lambda x: "Sort by Date" if x == "date" else "Sort by Tax Year",
+            key="mis_sort_radio",
+            horizontal=True,
+            label_visibility="visible",
+            on_change=_on_mis_sort_change,
+        )
 
     if st.session_state.mis_clean_df is not None:
         _render_mis_results()
@@ -235,13 +257,19 @@ def _run_mis_conversion(raw_df: DataFrame) -> None:
                 st.error("None of the expected columns were found. Conversion cannot proceed.")
                 return
 
-            status.write("Adding financial year…")
-            fy_df = add_financial_year(clean_df)
+            sort_by = st.session_state.mis_sort_by
+
+            if sort_by == "tax_year":
+                status.write("Using Tax Year from file…")
+                fy_df = add_financial_year_from_tax_year(clean_df)
+            else:
+                status.write("Adding financial year from payment date…")
+                fy_df = add_financial_year(clean_df)
 
             status.write("Sorting data…")
             sorted_df = sort_data(fy_df)
 
-            if sorted_df["Payment Date"].isna().sum() > 0:
+            if sort_by == "date" and sorted_df["Payment Date"].isna().sum() > 0:
                 unparseable = sorted_df["Payment Date"].isna().sum()
                 st.warning(
                     f"{unparseable} row(s) have unparseable payment "
